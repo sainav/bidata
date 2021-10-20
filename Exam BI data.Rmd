@@ -1,0 +1,289 @@
+---
+title: "Exam_BIdata"
+author: "Saiyyna Vasileva"
+date: "3/20/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## BI data
+
+*Business Intelligence*, or BI, is an umbrella term to portray a series of concepts and techniques to improve business dynamics by utilizing fact-based modernized support systems.
+
+BI: 
+  1) supports the firm’s strategic decision-making process; 
+  2) provides warning on threats and opportunities; 
+  3) provides competitive assessment;
+  4) maintains the strategic planning processes.
+
+The primary sources of the data for the analysis are SPARK and TAdviser. From SPARK
+general (company name, industrial classification, company size), and financial information was gathered. The information related to BI products (whether the company uses BI products or not) was collected from TAdviser manually.
+
+The main research question outlined with the BI data:
+Can the companies' performance predict if they have BI solutions implemented?
+
+
+```{r cars}
+library(xlsx2dfs)
+bi <- read.xlsx("BIdata2019.xlsx")
+head(bi)
+```
+```{r}
+summary(bi)
+```
+To check if number of companies corresponds to 413 we:
+```{r}
+dim(bi)
+```
+
+We should convert the of Industry, Size and BI into factor and convert rub. into mln. rub.:
+```{r}
+bi$BI <- as.factor(ifelse(bi$BI=="Yes", 1,0)) #converting into 0,1
+bi$Industry <- as.factor(bi$Industry)
+bi$Size <- as.factor(bi$Size)
+bi$TA<-bi$TA/1000000
+bi$Revenue<-bi$Revenue/1000000
+bi$NP<-bi$NP/1000000
+bi$EBIT<-bi$EBIT/1000000
+summary(bi)
+
+```
+
+To see the percentage of the companies having BI:
+```{r}
+haveBI<-sum(bi$BI==1)/length(bi$BI)
+haveBI*100
+```
+```{r}
+library(car)
+library(ggplot2)
+library(faraway)
+library(lattice)
+library(GGally)
+library(dplyr)
+```
+
+
+Distribution of companies by the Size:
+```{r}
+l1<-length(levels(bi[,4]))
+par(las=0,cex=.7,mar = c(5, 5, 3, 5))
+barplot(sort(table(bi[,4]),decreasing=T),main="Company size",
+        col=rgb(red=0,gree=((1:l1)/l1),blue=((1:l1)/l1)))
+```
+
+Distribution of companies by the Industry:
+```{r}
+l2<-length(levels(bi[,3]))
+par(las=2,cex=.5,mar = c(18, 5, 3, 5))
+barplot(sort(table(bi[,3]),decreasing=T),main="Industry",
+        col=rgb(red=0,gree=((1:l2)/l2),blue=((1:l2)/l2)))
+```
+
+**The distribution of companies by BI by size of the companies**
+```{r}
+histogram(~BI | Size, data=bi,col="darkslategray3")
+```
+
+To see if there is a Micro-enterprise company that have BI:
+```{r}
+sum(bi$Size=="Micro-enterprises"&bi$BI=="1")
+```
+
+Now let's see the correlation between the variables:
+```{r warning=FALSE}
+bicor <- data.frame(lapply(bi, as.integer),row.names = TRUE) #Convert data to numeric
+bicor <- subset(bicor,select = c(3:16))
+bicor <- bicor[complete.cases(bicor),]
+ggcorr(bicor,method = c("pairwise", "spearman"),nbreaks = 6,hjust = 0.8,label = TRUE,label_size = 2,color = "grey50")
+```
+
+High correlations between Revenue, Other Income, Other Costs, Net Profit, EBIT are reasonable since the final value EBIT calculated based on others. We are interested to take one of these financial measures to use in our model. We see that Net Profit that is least correlated with other variables in data, so we can consider to use it further.
+
+
+Boxplot of Net Profit by BI to see outliers:
+```{r}
+Boxplot(NP~BI, data = bi,id=list(n=Inf),id.method="y", col="steelblue")
+```
+To see the names of the companies that are outliers we use:
+```{r}
+a<-Boxplot(NP~BI, data = bi,id=list(n=Inf))
+bi[bi$N %in% a,2:3]
+```
+
+Now we create a new dataset without these outliers:
+```{r}
+biwout<-bi[!(bi$N %in% a),] #removing rows with outliers
+Boxplot(NP~BI, data = biwout)
+dim(biwout)
+```
+
+To delete a row with NA in a column Net Profit
+```{r}
+biwout <- biwout[complete.cases(biwout$NP),]
+biwout <- biwout[complete.cases(biwout$DSI),]
+dim(biwout)
+```
+
+One-way ANOVA test:
+```{r}
+anova <- aov(NP~BI, biwout)
+summary(anova) #The ANOVA test confirms the difference in average between thegroups.
+```
+
+Distribution of Net Profit:
+```{r}
+with(biwout, {
+    hist(NP, freq=FALSE,
+         breaks=40, main="")
+    lines(density(NP, from=0), lwd=3, lty=2)
+    lines(adaptiveKernel(NP, from=0), lwd=2, lty=1)
+    rug(NP)
+    legend("topright", c("Fixed bandwidth", "Adaptive bandwidth"),
+           lty=2:1, lwd=2, inset=.02)
+    box()
+  })
+```
+
+**Density of the Net Profit by Size of the company:**
+```{r echo=TRUE, warning=FALSE, results='hide'}
+ggplot(biwout, aes(x = NP)) +
+    geom_density(aes(color = Size), alpha = 0.5) + xlim(c(-1000, 1000))
+    theme_classic()
+```
+
+
+**Plot of Net Profit by BI**
+
+```{r warning=FALSE}
+gg <- ggplot(biwout, aes(x=BI, y=NP)) + geom_point(aes(col=Industry)) + geom_smooth(method="loess", se=F) + ylim(c(-500,70000)) + labs(subtitle="Net Profit by BI implementation", y="Net Profit, mln. rub.", x="BI", title="Scatterplot")
+plot(gg)
+```
+
+
+**Now let's build a binomial regression model with a response variable BI:**
+```{r}
+biglm<-glm(BI ~ NP, family = "binomial", biwout)
+summary(biglm)
+```
+
+**Plot of the model**
+
+```{r warning=FALSE}
+library(faraway)
+biwout$BIn<-as.numeric(biwout$BI)
+plot(BI/2~NP+Size, biwout, xlim=c(-15000,30000),ylim=c(0,1), type = "n",
+xlab="Net Profit, mln. rub",ylab="BI")
+x<--15000:30000
+lines(x,ilogit(biglm$coefficients[1]+biglm$coefficients[2]*x))
+```
+
+
+**Now let's add other variables:**
+```{r warning=FALSE}
+biglm_sic<-glm(BI ~ NP + Size + Industry + Ceff, family = "binomial", biwout)
+summary(biglm_sic)
+```
+We see that the one coefficient of the created dummy variables on 4 types of the Size is significant and the other coefficients of Industry and Cost Effectiveness are not significant. Thus, we proceed to check other variables.
+
+
+**Now we add Days sales of inventory**
+
+*The days sales of inventory (DSI) is a financial ratio (Average inventory/Cost of sales) that indicates the average time in days that a company takes to turn its inventory into sales. A high DSI can indicate that a firm is not properly managing its inventory*
+```{r warning=FALSE}
+biglm_sd<-glm(BI ~ NP + Size + DSI, family = "binomial", biwout)
+summary(biglm_sd)
+```
+
+**Now we check multicollinearity of variables in the latest model.**
+```{r}
+detach("package:faraway", unload = TRUE)
+vif(biglm_sd)
+```
+
+**Tests**
+
+To test the significance of the main effects
+```{r}
+drop1(biglm_sd, test="Chi")
+```
+
+To test the significance of the main effects
+```{r}
+pchisq(deviance(biglm_sd),df.residual(biglm_sd),lower=F)
+pchisq(deviance(biglm),df.residual(biglm),lower=F)
+```
+
+Type I
+```{r}
+anova(biglm,biglm_sd,test="Chisq")
+```
+
+Type II
+```{r}
+Anova(biglm_sd)
+```
+
+```{r}
+print(biglm_sd$coefficients)
+```
+```{r}
+exp(biglm_sd$coefficients)
+```
+When we increase a variable by one unit the odds of BI are multiplied by exp(β1).
+
+**Residuals**
+```{r warning=FALSE}
+residualPlots(biglm_sd, layout=c(1,4))
+```
+
+**Creating train/test data**
+
+```{r warning=FALSE}
+create_train_test <- function(biwout, size = 0.8, train = TRUE) {
+    n_row = nrow(biwout)
+    total_row = size * n_row
+    train_sample <- 1: total_row
+    if (train == TRUE) {
+        return (biwout[train_sample, ])
+    } else {
+        return (biwout[-train_sample, ])
+    }
+}
+bitrain <- create_train_test(biwout, 0.8, train = TRUE)
+bitest <- create_train_test(biwout, 0.8, train = FALSE)
+dim(bitrain)
+```
+
+```{r}
+dim(bitest)
+```
+
+**Creating a model for the train data**
+```{r}
+glmtrain<-glm(BI ~ NP + Size + DSI, family = "binomial", bitrain)
+summary(glmtrain)
+```
+
+**Creating predicts and confusion matrix**
+```{r}
+predict <- predict(glmtrain, bitest, type = 'response')
+# confusion matrix
+bimat <- table(bitest$BI, predict > 0.5)
+bimat
+```
+True negative = 50
+False negative = 11
+True positive = 0
+False positive = 5
+
+**Creating predicts and confusion matrix**
+```{r}
+acctest <- sum(diag(bimat)) / sum(bimat)
+acctest
+```
+Accuracy = (TN + TP)/(TN + TP + FN + FP) = 83%
+
